@@ -1,8 +1,6 @@
 import os
-import re
 import glob
-from pathlib import Path
-
+import re
 import pandas as pd
 import streamlit as st
 import plotly.express as px
@@ -25,10 +23,8 @@ div[data-testid="stMetric"] {
     unsafe_allow_html=True,
 )
 
-# ✅ Use safe relative path (works on Streamlit Cloud + locally)
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = "data"
 MONTH_ORDER = ["August", "September", "October", "November", "December"]
-
 
 # ---------------- Helpers ----------------
 def clean_colname(x: str) -> str:
@@ -36,21 +32,14 @@ def clean_colname(x: str) -> str:
     x = re.sub(r"\s+", " ", x)
     return x.strip().lower()
 
-
-def month_from_filename(name: str) -> str:
-    base = Path(str(name)).stem.strip().lower()
-    if "aug" in base:
-        return "August"
-    if "sep" in base:
-        return "September"
-    if "oct" in base:
-        return "October"
-    if "nov" in base:
-        return "November"
-    if "dec" in base:
-        return "December"
+def month_from_filename(path: str) -> str:
+    base = os.path.basename(path).split(".")[0].strip().lower()
+    if "aug" in base: return "August"
+    if "sep" in base: return "September"
+    if "oct" in base: return "October"
+    if "nov" in base: return "November"
+    if "dec" in base: return "December"
     return base.capitalize()
-
 
 def find_col(df: pd.DataFrame, contains=None, exact=None, exclude_contains=None):
     cols = list(df.columns)
@@ -73,7 +62,6 @@ def find_col(df: pd.DataFrame, contains=None, exact=None, exclude_contains=None)
                     return c
     return None
 
-
 def to_bool(x) -> bool:
     if pd.isna(x):
         return False
@@ -81,26 +69,13 @@ def to_bool(x) -> bool:
 
     if s in ["yes", "y", "true", "1", "viewed", "replied", "invite", "invited"]:
         return True
-    if s in [
-        "no",
-        "n",
-        "false",
-        "0",
-        "",
-        "none",
-        "nan",
-        "-",
-        "no result",
-        "not result",
-        "not replied",
-        "not viewed",
-    ]:
+    if s in ["no", "n", "false", "0", "", "none", "nan", "-", "no result", "not result",
+             "not replied", "not viewed"]:
         return False
     try:
         return float(s) != 0
     except:
         return True
-
 
 def to_num(x) -> float:
     if pd.isna(x):
@@ -114,13 +89,11 @@ def to_num(x) -> float:
     except:
         return 0.0
 
-
 def non_empty(x) -> bool:
     if pd.isna(x):
         return False
     s = str(x).strip()
     return s != "" and s.lower() != "nan"
-
 
 # ✅ MAIN LOGIC: BossDecision normalization
 def normalize_boss_decision(x) -> str:
@@ -155,20 +128,13 @@ def normalize_boss_decision(x) -> str:
     if s == "hired another":
         return "Client Hired Another"
 
-    # fallback
+    # fallback: treat unknown text as None (so it doesn't break stats)
+    # you can change this to "Unknown" if you prefer
     return "None"
 
-
 @st.cache_data
-def load_all_excels(uploaded_files=None):
-    """
-    Loads Excel either from repo folder (data/*.xlsx) OR from uploaded files.
-    Works both locally and on Streamlit Cloud.
-    """
-    # Prefer repo files if present, otherwise use uploaded files
-    repo_files = sorted(DATA_DIR.glob("*.xlsx")) if DATA_DIR.exists() else []
-    files = uploaded_files if uploaded_files else repo_files
-
+def load_all_excels():
+    files = sorted(glob.glob(os.path.join(DATA_DIR, "*.xlsx")))
     if not files:
         return pd.DataFrame(), [], {}
 
@@ -176,18 +142,11 @@ def load_all_excels(uploaded_files=None):
     detected = {}
 
     for f in files:
-        # f can be Path (repo file) OR UploadedFile (streamlit uploader)
-        if isinstance(f, (str, os.PathLike, Path)):
-            fname = os.path.basename(str(f))
-            raw = pd.read_excel(f)
-        else:
-            fname = f.name
-            raw = pd.read_excel(f)
-
+        raw = pd.read_excel(f)
         raw = raw.loc[:, ~raw.columns.astype(str).str.lower().str.startswith("unnamed")]
         raw.columns = [re.sub(r"\s+", " ", str(c)).strip() for c in raw.columns]
 
-        month = month_from_filename(fname)
+        month = month_from_filename(f)
 
         # detect columns
         col_jobs = find_col(raw, contains=["jobs verfied", "jobs verified"])
@@ -198,7 +157,7 @@ def load_all_excels(uploaded_files=None):
         col_boost = find_col(raw, contains=["boosted connects", "boosted"])
         col_total = find_col(raw, contains=["total connects", "total connect"])
 
-        detected[fname] = {
+        detected[os.path.basename(f)] = {
             "Month": month,
             "Detected": {
                 "jobs_verified": col_jobs,
@@ -211,18 +170,16 @@ def load_all_excels(uploaded_files=None):
             },
         }
 
-        out = pd.DataFrame(
-            {
-                "Month": month,
-                "BossDecision": raw[col_jobs].apply(normalize_boss_decision) if col_jobs else "None",
-                "Viewed": raw[col_view].apply(to_bool) if col_view else False,
-                "Replied": raw[col_reply].apply(to_bool) if col_reply else False,
-                "Invited": raw[col_inv].apply(to_bool) if col_inv else False,
-                "Written": raw[col_written].apply(non_empty) if col_written else True,
-                "BoostedConnects": raw[col_boost].apply(to_num) if col_boost else 0.0,
-                "TotalConnects": raw[col_total].apply(to_num) if col_total else 0.0,
-            }
-        )
+        out = pd.DataFrame({
+            "Month": month,
+            "BossDecision": raw[col_jobs].apply(normalize_boss_decision) if col_jobs else "None",
+            "Viewed": raw[col_view].apply(to_bool) if col_view else False,
+            "Replied": raw[col_reply].apply(to_bool) if col_reply else False,
+            "Invited": raw[col_inv].apply(to_bool) if col_inv else False,
+            "Written": raw[col_written].apply(non_empty) if col_written else True,
+            "BoostedConnects": raw[col_boost].apply(to_num) if col_boost else 0.0,
+            "TotalConnects": raw[col_total].apply(to_num) if col_total else 0.0,
+        })
 
         frames.append(out)
 
@@ -230,29 +187,17 @@ def load_all_excels(uploaded_files=None):
     months_present = [m for m in MONTH_ORDER if m in all_df["Month"].unique().tolist()]
     return all_df, months_present, detected
 
-
 def rate(n, d):
     return 0 if d == 0 else round((n / d) * 100, 1)
 
-
 # ---------------- Load ----------------
+df, months, detected = load_all_excels()
+
 st.title("Upwork Proposal Dashboard (Aug → Dec)")
 st.caption("Filter by Month to see month-only stats, or select Overall for combined analysis.")
 
-repo_excels = list(DATA_DIR.glob("*.xlsx")) if DATA_DIR.exists() else []
-uploaded = None
-
-if not repo_excels:
-    st.warning("No Excel files found in repo. Upload august.xlsx … december.xlsx below.")
-    uploaded = st.file_uploader(
-        "Upload monthly Excel files",
-        type=["xlsx"],
-        accept_multiple_files=True,
-    )
-
-df, months, detected = load_all_excels(uploaded_files=uploaded)
-
 if df.empty:
+    st.error("No Excel files found in /data folder. Add august.xlsx ... december.xlsx")
     st.stop()
 
 # ---------------- Sidebar Filters ----------------
@@ -326,64 +271,45 @@ tab1, tab2, tab3 = st.tabs(["📊 Overview", "📈 Trends", "📄 Data"])
 with tab1:
     c1, c2 = st.columns(2)
 
-    funnel_df = pd.DataFrame(
-        {
-            "Stage": ["Jobs Added", "Proposals Written", "Viewed", "Replied", "Invites"],
-            "Count": [jobs_added, proposals_written, viewed, replied, invites],
-        }
-    )
+    funnel_df = pd.DataFrame({
+        "Stage": ["Jobs Added", "Proposals Written", "Viewed", "Replied", "Invites"],
+        "Count": [jobs_added, proposals_written, viewed, replied, invites],
+    })
     fig_funnel = px.bar(
-        funnel_df,
-        y="Stage",
-        x="Count",
-        orientation="h",
+        funnel_df, y="Stage", x="Count", orientation="h",
         title="Funnel (Jobs → Proposals → Viewed → Replied → Invites)",
         text="Count",
     )
     fig_funnel.update_layout(yaxis={"categoryorder": "total ascending"})
-    c1.plotly_chart(
-        fig_funnel,
-        use_container_width=True,
-        key=f"funnel_{selected_month}_{'_'.join(selected_status)}",
-    )
+    c1.plotly_chart(fig_funnel, use_container_width=True, key=f"funnel_{selected_month}_{'_'.join(selected_status)}")
 
     dec_counts = filtered["BossDecision"].value_counts(dropna=False).reset_index()
     dec_counts.columns = ["BossDecision", "Count"]
     fig_dec = px.pie(dec_counts, names="BossDecision", values="Count", title="Boss Decision Breakdown")
-    c2.plotly_chart(
-        fig_dec,
-        use_container_width=True,
-        key=f"boss_pie_{selected_month}_{'_'.join(selected_status)}",
-    )
+    c2.plotly_chart(fig_dec, use_container_width=True, key=f"boss_pie_{selected_month}_{'_'.join(selected_status)}")
 
 with tab2:
     if selected_month == "Overall":
-        trend = (
-            df[df["BossDecision"].isin(selected_status)]
-            .groupby("Month")
-            .agg(
-                Jobs=("Month", "count"),
-                Written=("Written", "sum"),
-                Viewed=("Viewed", "sum"),
-                Replied=("Replied", "sum"),
-                Invited=("Invited", "sum"),
-                Approved=("BossDecision", lambda s: (s == "Approved").sum()),
-                Rejected=("BossDecision", lambda s: (s == "Rejected").sum()),
-                NoneJobs=("BossDecision", lambda s: (s == "None").sum()),  # ✅ fixed
-                Closed=("BossDecision", lambda s: (s == "Closed").sum()),
-                HiredAnother=("BossDecision", lambda s: (s == "Client Hired Another").sum()),
-                Connects=("TotalConnects", "sum"),
-            )
-            .reset_index()
-        )
+        trend = df[df["BossDecision"].isin(selected_status)].groupby("Month").agg(
+            Jobs=("Month", "count"),
+            Written=("Written", "sum"),
+            Viewed=("Viewed", "sum"),
+            Replied=("Replied", "sum"),
+            Invited=("Invited", "sum"),
+            Approved=("BossDecision", lambda s: (s == "Approved").sum()),
+            Rejected=("BossDecision", lambda s: (s == "Rejected").sum()),
+            NoneJobs=("BossDecision", lambda s: (s == "No result").sum()),
+            Closed=("BossDecision", lambda s: (s == "Closed").sum()),
+            HiredAnother=("BossDecision", lambda s: (s == "Client Hired Another").sum()),
+            Connects=("TotalConnects", "sum"),
+        ).reset_index()
 
         trend["Month"] = pd.Categorical(trend["Month"], categories=MONTH_ORDER, ordered=True)
         trend = trend.sort_values("Month")
 
         st.plotly_chart(
             px.line(
-                trend,
-                x="Month",
+                trend, x="Month",
                 y=["Jobs", "Written", "Viewed", "Replied", "Invited"],
                 markers=True,
                 title="Monthly Funnel Trend (Aug → Dec)",
